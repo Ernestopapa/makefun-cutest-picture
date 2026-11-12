@@ -1,5 +1,10 @@
-# Baby Dragon Hugging a Star — cutest-picture-01
+# Baby Kitten Hugging a Chick — cutest-picture-01
 
-A chubby mint-green baby dragon sits facing the viewer, head tilted slightly, hugging a small golden star that has its own happy face. One small pink heart floats beside its head.
+A program that draws one picture: a cream kitten sitting front-on, wrapping
+both front paws around a small fluffy yellow chick tucked against its chest.
+Warm peach background, cream halo, tiny light-blue bow on the kitten's right
+ear. No text anywhere.
 
-`main.py` (Python 3.13, standard library only) draws the picture with a small software renderer and writes `entry.png` (1024x1024 PNG) to `$MAKEFUN_OUTPUT_DIR` (or `/output` when unset). Deterministic: the same bytes on every run.
+Run `python3 main.py` — it writes `entry.png` (1024x1024) to
+`$MAKEFUN_OUTPUT_DIR` or `/output` if that is unset. Standard library only,
+no network, deterministic: two runs produce byte-identical output.

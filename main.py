@@ -1,337 +1,222 @@
-import struct
-import zlib
-import math
 import os
+import zlib
+import struct
+import math
 
-# --- Configuration ---
-WIDTH, HEIGHT = 1024, 1024
-SCALE = 2
-CANVAS_W, CANVAS_H = WIDTH * SCALE, HEIGHT * SCALE
-CANVAS_SIZE = CANVAS_W * CANVAS_H * 3
-
-# --- Palette ---
-PALETTE = {
-    'bg_top': (255, 247, 236),
-    'bg_bot': (255, 228, 194),
-    'halo': (255, 226, 178),
-    'shadow': (214, 150, 100, 0.38),
-    'mint': (121, 209, 166),
-    'outline': (62, 143, 104),
-    'wings': (92, 191, 146),
-    'belly': (255, 243, 220),
-    'horns': (255, 233, 184),
-    'blush': (255, 128, 138, 0.8),
-    'star_gold': (255, 197, 61),
-    'star_outline': (217, 142, 4),
-    'ink': (43, 43, 58),
-    'mouth': (74, 122, 99),
-    'heart': (255, 143, 163),
-    'white': (255, 255, 255),
+# Palette
+COLORS = {
+    "background": (255, 227, 200),
+    "halo": (255, 240, 222),
+    "fur_outline": (230, 199, 158),
+    "kitten_fur": (255, 247, 230),
+    "belly": (255, 254, 249),
+    "pink": (255, 207, 192),
+    "blush": (255, 188, 200),
+    "eye_brown": (51, 38, 26),
+    "white": (255, 255, 255),
+    "nose": (255, 143, 163),
+    "mouth": (156, 107, 74),
+    "whisker": (217, 180, 143),
+    "chick_yellow": (255, 217, 61),
+    "chick_outline": (237, 185, 10),
+    "chick_wing": (245, 197, 49),
+    "beak": (255, 159, 28),
+    "chick_blush": (255, 160, 122),
+    "bow": (126, 200, 227),
+    "bow_centre": (90, 169, 214)
 }
 
-# --- Canvas ---
-canvas = bytearray(CANVAS_SIZE)
+WIDTH, HEIGHT = 1024, 1024
+canvas = bytearray([255, 227, 200] * WIDTH * HEIGHT)
 
-def set_pixel(x, y, r, g, b, alpha=1.0):
-    if not (0 <= x < CANVAS_W and 0 <= y < CANVAS_H):
-        return
-    idx = (y * CANVAS_W + x) * 3
-    if alpha >= 1.0:
-        canvas[idx:idx+3] = bytes([r, g, b])
-    else:
-        # Simple alpha blending
-        canvas[idx] = int(canvas[idx] * (1 - alpha) + r * alpha)
-        canvas[idx+1] = int(canvas[idx+1] * (1 - alpha) + g * alpha)
-        canvas[idx+2] = int(canvas[idx+2] * (1 - alpha) + b * alpha)
+def get_pixel(x, y):
+    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+        idx = (y * WIDTH + x) * 3
+        return canvas[idx:idx+3]
+    return None
 
-def fill_row(y, x0, x1, rgb):
-    if not (0 <= y < CANVAS_H): return
-    x0 = max(0, min(CANVAS_W - 1, int(x0)))
-    x1 = max(0, min(CANVAS_W - 1, int(x1)))
-    if x0 > x1: x0, x1 = x1, x0
-    r, g, b = rgb[:3]
-    row_start = y * CANVAS_W * 3
-    for x in range(x0, x1 + 1):
-        idx = row_start + x * 3
-        canvas[idx:idx+3] = bytes([r, g, b])
+def set_pixel(x, y, color):
+    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+        idx = (y * WIDTH + x) * 3
+        canvas[idx:idx+3] = bytes(color)
 
-# --- Primitives ---
-def fill_ellipse(cx, cy, rx, ry, rgb):
-    cx, cy, rx, ry = int(cx * SCALE), int(cy * SCALE), int(rx * SCALE), int(ry * SCALE)
-    for y in range(max(0, cy - ry), min(CANVAS_H, cy + ry)):
+def draw_filled_circle(cx, cy, r, color):
+    r_sq = r * r
+    y0 = max(0, int(math.floor(cy - r)))
+    y1 = min(HEIGHT, int(math.ceil(cy + r)) + 1)
+    for y in range(y0, y1):
         dy = y - cy
-        dx = int(rx * math.sqrt(max(0, 1 - (dy / ry) ** 2)))
-        fill_row(y, cx - dx, cx + dx, rgb)
+        if dy * dy > r_sq:
+            continue
+        dx = int(math.sqrt(r_sq - dy * dy))
+        for x in range(max(0, cx - dx), min(WIDTH, cx + dx + 1)):
+            set_pixel(x, y, color)
 
-def fill_polygon(pts, rgb):
-    pts = [(p[0] * SCALE, p[1] * SCALE) for p in pts]
-    if not pts: return
-    edges = []
-    for i in range(len(pts)):
-        p1, p2 = pts[i], pts[(i + 1) % len(pts)]
-        if p1[1] != p2[1]:
-            edges.append((min(p1[1], p2[1]), max(p1[1], p2[1]), p1, p2))
-    min_y = int(min(p[1] for p in pts))
-    max_y = int(max(p[1] for p in pts))
-    for y in range(max(0, min_y), min(CANVAS_H, max_y + 1)):
-        intersections = []
-        for ymin, ymax, p1, p2 in edges:
-            if ymin <= y < ymax:
-                x = p1[0] + (y - p1[1]) * (p2[0] - p1[0]) / (p2[1] - p1[1])
-                intersections.append(x)
-        intersections.sort()
-        for i in range(0, len(intersections), 2):
-            fill_row(y, intersections[i], intersections[i+1], rgb)
+def draw_filled_ellipse(cx, cy, rx, ry, color):
+    for y in range(max(0, cy - ry), min(HEIGHT, cy + ry + 1)):
+        dy = y - cy
+        # (x - cx)^2 / rx^2 + dy^2 / ry^2 <= 1
+        # (x - cx)^2 <= rx^2 * (1 - dy^2 / ry^2)
+        val = 1 - (dy * dy) / (ry * ry)
+        if val < 0: continue
+        dx = int(rx * math.sqrt(val))
+        for x in range(max(0, cx - dx), min(WIDTH, cx + dx + 1)):
+            set_pixel(x, y, color)
 
-def draw_circle(cx, cy, r, rgb):
-    fill_ellipse(cx, cy, r, r, rgb)
+def draw_filled_rotated_ellipse(cx, cy, rx, ry, angle, color):
+    # Rotate by -angle to align with axes
+    theta = math.radians(-angle)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    
+    # Bounding box
+    cos_t_abs = abs(cos_t)
+    sin_t_abs = abs(sin_t)
+    width = rx * cos_t_abs + ry * sin_t_abs
+    height = rx * sin_t_abs + ry * cos_t_abs
+    
+    for y in range(max(0, int(cy - height)), min(HEIGHT, int(cy + height) + 1)):
+        for x in range(max(0, int(cx - width)), min(WIDTH, int(cx + width) + 1)):
+            dx = x - cx
+            dy = y - cy
+            # Rotate point back
+            rx_p = dx * cos_t - dy * sin_t
+            ry_p = dx * sin_t + dy * cos_t
+            if (rx_p / rx)**2 + (ry_p / ry)**2 <= 1:
+                set_pixel(x, y, color)
 
-def draw_bezier_filled(pts, ctrl, rgb):
-    # Simplified Bezier fill: just connect the points
-    fill_polygon(pts + ctrl, rgb)
-
-def draw_capsule(p1, p2, r, rgb):
-    d = math.hypot(p2[0]-p1[0], p2[1]-p1[1])
-    steps = max(1, int(d / (r/2)))
+def draw_line(x1, y1, x2, y2, thickness, color):
+    steps = int(math.sqrt((x2 - x1)**2 + (y2 - y1)**2) / 0.5)
+    if steps == 0: steps = 1
     for i in range(steps + 1):
         t = i / steps
-        x = p1[0] + (p2[0]-p1[0]) * t
-        y = p1[1] + (p2[1]-p1[1]) * t
-        draw_circle(x, y, r, rgb)
+        x = x1 + (x2 - x1) * t
+        y = y1 + (y2 - y1) * t
+        draw_filled_circle(int(x), int(y), thickness / 2, color)
 
-def draw_bezier_quad(p0, p1, p2, r, rgb):
-    def B(t):
-        return ((1-t)**2*p0[0] + 2*(1-t)*t*p1[0] + t**2*p2[0],
-                (1-t)**2*p0[1] + 2*(1-t)*t*p1[1] + t**2*p2[1])
-    pts = [B(i/24) for i in range(25)]
-    for i in range(len(pts)-1):
-        draw_capsule(pts[i], pts[i+1], r, rgb)
+def draw_arc(cx, cy, r, start_angle, end_angle, thickness, color):
+    for a in range(start_angle, end_angle + 1):
+        theta = math.radians(a)
+        x = cx + r * math.cos(theta)
+        y = cy + r * math.sin(theta)
+        draw_filled_circle(int(x), int(y), thickness / 2, color)
 
-def draw_wings(cx, cy, mirror=False):
-    pts = [(340, 545), (285, 530), (248, 565), (248, 565), (275, 590), (300, 605), (300, 605), (330, 615), (355, 635), (355, 635), (350, 590), (340, 545)]
-    if mirror: pts = [(1024 - p[0], p[1]) for p in pts]
-    fill_polygon(pts, PALETTE['wings'])
-
-def draw_horns(cx, cy, mirror=False):
-    pts = [(372, 235), (350, 180), (368, 152), (368, 152), (402, 190), (418, 230)]
-    if mirror: pts = [(1024 - p[0], p[1]) for p in pts]
-    fill_polygon(pts, PALETTE['horns'])
-
-def draw_ears(cx, cy, mirror=False):
-    draw_circle(cx, cy, 40, PALETTE['outline'])
-    draw_circle(cx, cy, 33, PALETTE['mint'])
-    draw_circle(cx, cy, 18, PALETTE['belly'])
-
-def draw_lashes(ex, ey, mirror=False):
-    for a in [195, 220, 245] if not mirror else [295, 320, 345]:
-        rad = math.radians(a)
-        p1 = (ex + 50*math.cos(rad), ey + 60*math.sin(rad))
-        p2 = (ex + (50+18)*math.cos(rad), ey + (60+18)*math.sin(rad))
-        draw_capsule(p1, p2, 4.5, PALETTE['ink'])
-
-def draw_smile(sx, sy):
-    draw_bezier_quad((482, 488), (512, 508), (543, 486), 3.5, PALETTE['mouth'])
-
-def draw_heart(hx, hy):
-    def get_heart_pts(scale_factor):
-        pts = []
-        for i in range(72):
-            t = i / 72 * 2 * math.pi
-            x = 16 * math.sin(t)**3
-            y = 13 * math.cos(t) - 5 * math.cos(2*t) - 2 * math.cos(3*t) - math.cos(4*t)
-            rad = math.radians(15)
-            rx = x * math.cos(rad) - y * math.sin(rad)
-            ry = x * math.sin(rad) + y * math.cos(rad)
-            pts.append((hx + rx * scale_factor / 16, hy - ry * scale_factor / 16))
-        return pts
-    fill_polygon(get_heart_pts(32.4), (214, 90, 110))
-    fill_polygon(get_heart_pts(30), (255, 143, 163))
-
-def draw_star(cx, cy):
-    def get_star_pts(outer_r, inner_r):
-        pts = []
-        for i in range(10):
-            angle = math.radians(12 + i * 36)
-            r = outer_r if i % 2 == 0 else inner_r
-            pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-        return pts
-    fill_polygon(get_star_pts(76.3, 33.9), PALETTE['star_outline'])
-    fill_polygon(get_star_pts(72, 32), PALETTE['star_gold'])
-
-    # Face
-    draw_bezier_quad((493-9, 610), (493, 610-7), (493+9, 610), 3, PALETTE['ink'])
-    draw_bezier_quad((533-9, 608), (533, 608-7), (533+9, 608), 3, PALETTE['ink'])
-    draw_bezier_quad((512-15, 625), (512, 625-5), (512+15, 625), 3, PALETTE['ink'])
-
-def draw_arms(cx, cy, mirror=False):
-    if mirror:
-        pts = [(640, 595), (600, 653), (570, 648)]
-    else:
-        pts = [(385, 600), (425, 655), (455, 650)]
-    for i in range(len(pts)-1):
-        draw_capsule(pts[i], pts[i+1], 39, PALETTE['outline'])
-    for i in range(len(pts)-1):
-        draw_capsule(pts[i], pts[i+1], 32, PALETTE['mint'])
-
-def draw_pupil_highlights(ex, ey):
-    fill_ellipse(ex-8, ey-11, 9, 9, PALETTE['white'])
-    fill_ellipse(ex+10, ey+12, 5, 5, PALETTE['white'])
-
-# --- Scene ---
-def render():
-    # 1. Gradient
-    for y in range(CANVAS_H):
-        t = y / CANVAS_H
-        r = int(PALETTE['bg_top'][0] * (1 - t) + PALETTE['bg_bot'][0] * t)
-        g = int(PALETTE['bg_top'][1] * (1 - t) + PALETTE['bg_bot'][1] * t)
-        b = int(PALETTE['bg_top'][2] * (1 - t) + PALETTE['bg_bot'][2] * t)
-        fill_row(y, 0, CANVAS_W - 1, (r, g, b))
-
-# --- Scene ---
-def rotate_point(pt, cx, cy, angle_deg):
-    angle = math.radians(angle_deg)
-    x, y = pt[0] - cx, pt[1] - cy
-    new_x = x * math.cos(angle) - y * math.sin(angle)
-    new_y = x * math.sin(angle) + y * math.cos(angle)
-    return (new_x + cx, new_y + cy)
-
-def render():
-    # 1. Gradient
-    for y in range(CANVAS_H):
-        t = y / CANVAS_H
-        r = int(PALETTE['bg_top'][0] * (1 - t) + PALETTE['bg_bot'][0] * t)
-        g = int(PALETTE['bg_top'][1] * (1 - t) + PALETTE['bg_bot'][1] * t)
-        b = int(PALETTE['bg_top'][2] * (1 - t) + PALETTE['bg_bot'][2] * t)
-        fill_row(y, 0, CANVAS_W - 1, (r, g, b))
-
-    # 2. Halo
-    fill_ellipse(512, 500, 335, 335, PALETTE['halo'])
+def draw_all():
+    # S0: Background
+    # Already done in canvas init
     
-    # 3. Sparkles / Dots
-    for (cx, cy, r) in [(170, 215, 16), (855, 175, 14), (872, 430, 12), (148, 470, 13), (835, 690, 11)]:
-        # Simple sparkle as 4-point diamond
-        pts = [(cx, cy-r), (cx+r, cy), (cx, cy+r), (cx-r, cy)]
-        fill_polygon(pts, PALETTE['star_gold'])
-    for (cx, cy, r) in [(240, 300, 5), (790, 300, 5), (700, 160, 4)]:
-        draw_circle(cx, cy, r, PALETTE['heart'])
-
-    # 4. Shadow
-    fill_ellipse(512, 852, 255, 34, (*PALETTE['shadow'][:3], 0.38))
-
-    # 5. Wings
-    draw_wings(512, 655)
-    draw_wings(512, 655, mirror=True)
-
-    # 6. Body
-    fill_ellipse(512, 655, 242, 202, PALETTE['outline'])
-    fill_ellipse(512, 655, 235, 195, PALETTE['mint'])
+    # S1: Halo
+    draw_filled_circle(512, 512, 440, COLORS["halo"])
     
-    # 6b. Belly
-    fill_ellipse(512, 705, 148, 122, PALETTE['belly'])
-
-    # 7. Feet
-    for cx in [415, 610]:
-        fill_ellipse(cx, 838, 62, 35, PALETTE['outline'])
-        fill_ellipse(cx, 838, 55, 28, PALETTE['mint'])
-        fill_ellipse(cx, 844, 36, 16, PALETTE['belly'])
-
-    # 8. Ears
-    draw_ears(332, 318)
-    draw_ears(682, 308)
-
-    # 9. Horns
-    draw_horns(505, 372)
-    draw_horns(505, 372, mirror=True)
-
-    # 10. Head
-    fill_ellipse(505, 372, 192, 192, PALETTE['outline'])
-    fill_ellipse(505, 372, 185, 185, PALETTE['mint'])
-
-    # 11. Head tilt (applying rotation to features)
-    # The spec asks for a rotation, I will apply it to eyes, snout, mouth, nostrils.
-    # Features need to be drawn now to be on top.
+    # S2: Kitten body
+    draw_filled_ellipse(512, 720, 285, 235, COLORS["fur_outline"])
+    draw_filled_ellipse(512, 720, 277, 227, COLORS["kitten_fur"])
     
-    # 12. Eyes
-    eye_centers = [rotate_point((432, 362), 505, 372, 8), rotate_point((592, 348), 505, 372, 8)]
-    for (ex, ey) in eye_centers:
-        fill_ellipse(ex, ey, 55, 65, PALETTE['outline'])
-        fill_ellipse(ex, ey, 50, 60, PALETTE['white'])
-        # Pupils
-        px, py = ex + (8 if ex < 505 else -8), ey + 8
-        fill_ellipse(px, py, 26, 32, PALETTE['ink'])
-        draw_pupil_highlights(px, py)
+    # S3: Belly
+    draw_filled_ellipse(512, 760, 175, 150, COLORS["belly"])
+    
+    # S4: Feet
+    draw_filled_ellipse(370, 890, 95, 60, COLORS["fur_outline"])
+    draw_filled_ellipse(370, 890, 87, 52, COLORS["kitten_fur"])
+    draw_filled_ellipse(370, 895, 30, 14, COLORS["pink"])
+    draw_filled_ellipse(654, 890, 95, 60, COLORS["fur_outline"])
+    draw_filled_ellipse(654, 890, 87, 52, COLORS["kitten_fur"])
+    draw_filled_ellipse(654, 895, 30, 14, COLORS["pink"])
+    
+    # S5: Ears
+    draw_filled_rotated_ellipse(355, 215, 85, 95, -15, COLORS["fur_outline"])
+    draw_filled_rotated_ellipse(355, 215, 77, 87, -15, COLORS["kitten_fur"])
+    draw_filled_rotated_ellipse(355, 225, 45, 55, -15, COLORS["pink"])
+    draw_filled_rotated_ellipse(669, 215, 85, 95, 15, COLORS["fur_outline"])
+    draw_filled_rotated_ellipse(669, 215, 77, 87, 15, COLORS["kitten_fur"])
+    draw_filled_rotated_ellipse(669, 225, 45, 55, 15, COLORS["pink"])
+    
+    # S6: Head
+    draw_filled_circle(512, 395, 215, COLORS["fur_outline"])
+    draw_filled_circle(512, 395, 207, COLORS["kitten_fur"])
+    
+    # S7: Bow
+    draw_filled_rotated_ellipse(640, 135, 32, 20, -25, COLORS["bow"])
+    draw_filled_rotated_ellipse(700, 135, 32, 20, 25, COLORS["bow"])
+    draw_filled_circle(670, 135, 16, COLORS["bow_centre"])
+    
+    # S8: Chick body
+    draw_filled_ellipse(512, 635, 122, 112, COLORS["chick_outline"])
+    draw_filled_ellipse(512, 635, 114, 104, COLORS["chick_yellow"])
+    
+    # S9: Chick tuft
+    draw_filled_circle(482, 538, 20, COLORS["chick_yellow"])
+    draw_filled_circle(512, 528, 22, COLORS["chick_yellow"])
+    draw_filled_circle(542, 538, 20, COLORS["chick_yellow"])
+    
+    # S10: Chick wings
+    draw_filled_rotated_ellipse(415, 650, 22, 38, -15, COLORS["chick_wing"])
+    draw_filled_rotated_ellipse(609, 650, 22, 38, 15, COLORS["chick_wing"])
+    
+    # S11: Chick face
+    draw_filled_circle(472, 615, 14, COLORS["eye_brown"])
+    draw_filled_circle(477, 610, 5, COLORS["white"])
+    draw_filled_circle(552, 615, 14, COLORS["eye_brown"])
+    draw_filled_circle(557, 610, 5, COLORS["white"])
+    draw_filled_ellipse(512, 650, 22, 15, COLORS["beak"])
+    draw_filled_ellipse(448, 655, 18, 10, COLORS["chick_blush"])
+    draw_filled_ellipse(576, 655, 18, 10, COLORS["chick_blush"])
+    
+    # S12: Kitten paws
+    draw_filled_rotated_ellipse(418, 670, 58, 78, -12, COLORS["fur_outline"])
+    draw_filled_rotated_ellipse(418, 670, 50, 70, -12, COLORS["kitten_fur"])
+    draw_filled_ellipse(418, 700, 20, 12, COLORS["pink"])
+    draw_filled_rotated_ellipse(606, 670, 58, 78, 12, COLORS["fur_outline"])
+    draw_filled_rotated_ellipse(606, 670, 50, 70, 12, COLORS["kitten_fur"])
+    draw_filled_ellipse(606, 700, 20, 12, COLORS["pink"])
+    
+    # S13: Kitten face
+    draw_filled_ellipse(435, 385, 40, 50, COLORS["eye_brown"])
+    draw_filled_circle(448, 368, 14, COLORS["white"])
+    draw_filled_circle(425, 400, 6, COLORS["white"])
+    draw_filled_ellipse(589, 385, 40, 50, COLORS["eye_brown"])
+    draw_filled_circle(602, 368, 14, COLORS["white"])
+    draw_filled_circle(579, 400, 6, COLORS["white"])
+    draw_filled_ellipse(512, 462, 24, 17, COLORS["nose"])
+    draw_arc(488, 478, 26, 15, 105, 5, COLORS["mouth"])
+    draw_arc(536, 478, 26, 75, 165, 5, COLORS["mouth"])
+    draw_filled_ellipse(378, 472, 38, 22, COLORS["blush"])
+    draw_filled_ellipse(646, 472, 38, 22, COLORS["blush"])
+    
+    # S14: Whiskers
+    draw_line(310, 430, 390, 445, 4, COLORS["whisker"])
+    draw_line(312, 470, 392, 468, 4, COLORS["whisker"])
+    draw_line(714, 430, 634, 445, 4, COLORS["whisker"])
+    draw_line(712, 470, 632, 468, 4, COLORS["whisker"])
 
-    # 13. Lashes
-    draw_lashes(eye_centers[0][0], eye_centers[0][1])
-    draw_lashes(eye_centers[1][0], eye_centers[1][1], mirror=True)
-
-    # 13. Blush
-    for (bx, by) in [rotate_point((388, 442), 505, 372, 8), rotate_point((632, 428), 505, 372, 8)]:
-        fill_ellipse(bx, by, 32, 19, PALETTE['blush'])
-
-    # 14. Snout / Nostrils / Smile
-    sx, sy = rotate_point((510, 462), 505, 372, 8)
-    fill_ellipse(sx, sy, 74, 48, PALETTE['belly'])
-    draw_smile(512, 462)
-    for (nx, ny) in [rotate_point((493, 452), 505, 372, 8), rotate_point((528, 450), 505, 372, 8)]:
-        draw_circle(nx, ny, 4.5, PALETTE['ink'])
-
-    # 15. Star
-    draw_star(512, 625)
-
-    # 16. Arms/Paws
-    draw_arms(512, 655)
-    for cx in [425, 600]:
-        fill_ellipse(cx, 650, 39, 39, PALETTE['outline'])
-        fill_ellipse(cx, 650, 32, 32, PALETTE['mint'])
-
-    # 17. Heart
-    draw_heart(692, 252)
-
-# --- PNG Encoder ---
-def write_png(filename):
-    # Downsample 2048x2048 to 1024x1024
-    out_canvas = bytearray(WIDTH * HEIGHT * 3)
+def create_png():
+    draw_all()
+    
+    # PNG structure
+    signature = b'\x89PNG\r\n\x1a\n'
+    
+    # IHDR
+    ihdr_data = struct.pack('>IIBBBBB', WIDTH, HEIGHT, 8, 2, 0, 0, 0)
+    ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_data + struct.pack('>I', zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff)
+    
+    # IDAT
+    raw_data = bytearray()
     for y in range(HEIGHT):
-        for x in range(WIDTH):
-            # Simple 2x2 box average
-            r, g, b = 0, 0, 0
-            for sy in range(SCALE):
-                for sx in range(SCALE):
-                    idx = ((y * SCALE + sy) * CANVAS_W + (x * SCALE + sx)) * 3
-                    r += canvas[idx]
-                    g += canvas[idx+1]
-                    b += canvas[idx+2]
-            idx = (y * WIDTH + x) * 3
-            out_canvas[idx] = r // 4
-            out_canvas[idx+1] = g // 4
-            out_canvas[idx+2] = b // 4
-    
-    # Compress
-    compressed = bytearray()
-    for y in range(HEIGHT):
-        compressed.append(0) # Filter None
-        row_start = y * WIDTH * 3
-        compressed.extend(out_canvas[row_start : row_start + WIDTH * 3])
-    idat_data = zlib.compress(compressed, 9)
-    
-    # Write file
-    with open(filename, 'wb') as f:
-        f.write(b'\x89PNG\r\n\x1a\n')
+        raw_data.append(0) # Filter byte 0
+        raw_data.extend(canvas[y * WIDTH * 3 : (y + 1) * WIDTH * 3])
         
-        def write_chunk(type, data):
-            f.write(struct.pack('>I', len(data)))
-            f.write(type)
-            f.write(data)
-            f.write(struct.pack('>I', zlib.crc32(type + data) & 0xFFFFFFFF))
-        
-        write_chunk(b'IHDR', struct.pack('>IIBBBBB', WIDTH, HEIGHT, 8, 2, 0, 0, 0))
-        write_chunk(b'IDAT', idat_data)
-        write_chunk(b'IEND', b'')
+    compressed_data = zlib.compress(raw_data, 9)
+    idat = struct.pack('>I', len(compressed_data)) + b'IDAT' + compressed_data + struct.pack('>I', zlib.crc32(b'IDAT' + compressed_data) & 0xffffffff)
+    
+    # IEND
+    iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff)
+    
+    return signature + ihdr + idat + iend
 
-# --- Run ---
-if __name__ == '__main__':
-    render()
-    output_dir = os.environ.get('MAKEFUN_OUTPUT_DIR', '/output')
+if __name__ == "__main__":
+    output_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(output_dir, exist_ok=True)
-    write_png(os.path.join(output_dir, 'entry.png'))
+    
+    png_data = create_png()
+    with open(os.path.join(output_dir, "entry.png"), "wb") as f:
+        f.write(png_data)
